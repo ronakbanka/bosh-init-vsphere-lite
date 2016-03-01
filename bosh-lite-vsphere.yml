@@ -1,0 +1,151 @@
+---
+name: bosh-lite-vsphere
+
+releases:
+- name: bosh
+  url: https://bosh.io/d/github.com/cloudfoundry/bosh?v=251
+  sha1: 649fca64ac878476c6d68fc5e7ff86c2d879be16
+- name: bosh-vsphere-cpi
+  url: https://bosh.io/d/github.com/cloudfoundry-incubator/bosh-vsphere-cpi-release?v=17
+  sha1: 06ea0011c26c87d440947f9d6b5753495c593914
+- name: bosh-warden-cpi
+  url: https://bosh.io/d/github.com/cppforlife/bosh-warden-cpi-release?v=29
+  sha1: 9cc293351744f3892d4a79479cccd3c3b2cf33c7
+- name: garden-linux
+  url: https://bosh.io/d/github.com/cloudfoundry-incubator/garden-linux-release?v=0.334.0
+  sha1: 85170c5089fa4ff317f139c2f1da024860dbea85
+
+resource_pools:
+- name: vms
+  network: bosh-network
+  stemcell:
+    url: https://bosh.io/d/stemcells/bosh-vsphere-esxi-ubuntu-trusty-go_agent?v=3189
+    sha1: 61b958f8f2084a9a161ec0a4e5fbf4a41b9bc4e0
+  cloud_properties:
+    cpu: 2
+    ram: 16_384
+    disk: 20_000
+  env:
+    bosh:
+      # c1oudc0w is a default password for vcap user
+      password: "$6$4gDD3aV0rdqlrKC$2axHCxGKIObs6tAmMTqYCspcdvQXh3JJcvWOY2WGb4SrdXtnCyNaWlrf3WEqvYR2MYizEGp3kMmbpwBC6jsHt0"
+
+disk_pools:
+- name: disks
+  disk_size: 50_000
+
+networks:
+- name: bosh-network
+  type: manual
+  subnets: #<-- Add your networks
+  - cloud_properties:
+      name:
+    gateway:
+    range:
+    dns: []
+    reserved:
+    static:
+
+jobs:
+- name: bosh
+  instances: 1
+
+  templates:
+  - {name: nats, release: bosh}
+  - {name: redis, release: bosh}
+  - {name: postgres, release: bosh}
+  - {name: blobstore, release: bosh}
+  - {name: director, release: bosh}
+  - {name: health_monitor, release: bosh}
+  - {name: warden_cpi, release: bosh-warden-cpi}
+  - {name: garden, release: garden-linux}
+
+  resource_pool: vms
+  persistent_disk_pool: disks
+
+  networks:
+  - {name: bosh-network, static_ips: []}  #<- Add with Bosh IP
+
+  properties:
+    nats:
+      address: 127.0.0.1
+      user: nats
+      password: nats
+
+    redis:
+      listen_addresss: 127.0.0.1
+      address: 127.0.0.1
+      password: redis-password
+
+    postgres: &db
+      host: 127.0.0.1
+      user: postgres
+      password: postgres-password
+      database: bosh
+      adapter: postgres
+
+    blobstore:
+      address:     #<-- bosh IP
+      port: 25250
+      provider: dav
+      director: {user: director, password: director-password}
+      agent: {user: agent, password: agent-password}
+
+    director:
+      address: 127.0.0.1
+      name: bosh-lite-vsphere
+      db: *db
+      cpi_job: warden_cpi
+      ignore_missing_gateway: true
+
+    hm:
+      http: {user: hm, password: hm-password}
+      director_account: {user: admin, password: admin}
+      resurrector_enabled: true
+
+    warden_cpi:
+      host_ip: #<- Bosh IP
+      warden:
+        connect_network: tcp
+        connect_address: 127.0.0.1:7777
+      agent:
+        mbus: nats://nats:nats@IP:4222   #<- Replace IP with Bosh IP
+        blobstore:
+          provider: dav
+          options:
+            endpoint: http://IP:25250 #<- Replace IP with Bosh IP
+            user: agent
+            password: agent-password
+    garden:
+      listen_network: tcp
+      listen_address: 0.0.0.0:7777
+      disk_quota_enabled: false
+      allow_host_access: true
+      default_container_grace_time: 0
+
+    agent: {mbus: "nats://nats:nats@IP:4222"} #<- Replace IP with Bosh IP
+
+    ntp: &ntp []   #<- Add ntp servers
+
+cloud_provider:
+  template: {name: vsphere_cpi, release: bosh-vsphere-cpi}
+
+  mbus: "https://mbus:mbus-password@IP:6868" #<- Replace IP with Bosh IP
+
+  properties:
+    vcenter: &vcenter # <--- Replace values below
+      address:
+      user:
+      password:
+      datacenters:
+        - name:
+          vm_folder:
+          template_folder:
+          disk_path:
+          datastore_pattern: 
+          persistent_datastore_pattern:
+          allow_mixed_datastores: true
+          clusters:
+    agent: {mbus: "https://mbus:mbus-password@0.0.0.0:6868"}
+    blobstore: {provider: local, path: /var/vcap/micro_bosh/data/cache}
+    ntp: *ntp
